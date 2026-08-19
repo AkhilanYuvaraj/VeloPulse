@@ -11,7 +11,7 @@
       "attrs": {}
     },
     {
-      "type": "mpu6050",
+      "type": "wokwi-mpu6050",
       "id": "imu1",
       "top": 150,
       "left": 200,
