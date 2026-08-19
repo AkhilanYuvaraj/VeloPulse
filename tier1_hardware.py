@@ -58,6 +58,7 @@ class HardwareMode(Enum):
     SERIAL = "SERIAL"
     BLUETOOTH_OBD = "BLUETOOTH_OBD"
     SIMULATION = "SIMULATION"
+    WOKWI = "WOKWI"
 
 
 @dataclass
@@ -469,6 +470,128 @@ class SimulationTelemetrySource(TelemetrySource):
         return self._connected
 
 
+class WokwiTelemetrySource(TelemetrySource):
+    """
+    Reads JSON telemetry from an ESP32 running on Wokwi simulator.
+
+    Connects via pyserial (supports RFC2217 serial-over-TCP for the
+    Wokwi IoT Gateway, or direct COM port via Wokwi CLI).
+
+    The ESP32 sketch outputs one JSON line per reading at 2 Hz with
+    all canonical VeloPulseAI ML features:
+        engine_temp_c, engine_rpm, coolant_temp_c, battery_voltage_v,
+        vibration_level, odometer_reading, engine_load, vehicle_speed
+    Plus raw MPU6050 diagnostics in a nested ``mpu6050_raw`` object.
+    """
+
+    def __init__(self, port: str = "rfc2217://localhost:4000", baudrate: int = 115200):
+        self.port = port
+        self.baudrate = baudrate
+        self.serial_conn = None
+        self._connected = False
+        self._frames_received = 0
+        self._errors_count = 0
+        self._last_reading_time = None
+        self._status = ConnectionStatus(
+            mode=HardwareMode.WOKWI,
+            connected=False,
+            port_or_address=self.port,
+            last_reading_timestamp=None,
+            frames_received=0,
+            errors_count=0,
+            uptime_seconds=0.0,
+        )
+
+    def connect(self) -> bool:
+        if serial is None:
+            logger.error("pyserial is not installed. Cannot use Wokwi mode.")
+            return False
+
+        try:
+            self.serial_conn = serial.serial_for_url(
+                self.port,
+                baudrate=self.baudrate,
+                timeout=2.0,
+            )
+            self._connected = True
+            self._status._start_time = time.time()
+            logger.info("Connected to Wokwi ESP32 at %s", self.port)
+            return True
+        except Exception as e:
+            logger.error("Failed to connect to Wokwi ESP32 at %s: %s", self.port, e)
+            self._errors_count += 1
+            return False
+
+    def disconnect(self) -> None:
+        self._connected = False
+        if self.serial_conn:
+            try:
+                self.serial_conn.close()
+            except Exception:
+                pass
+        logger.info("Disconnected from Wokwi ESP32.")
+
+    def read_frame(self) -> Optional[Dict[str, Any]]:
+        if not self._connected or not self.serial_conn:
+            return None
+
+        try:
+            line = self.serial_conn.readline().decode("utf-8", errors="replace").strip()
+            if not line:
+                return None
+
+            raw_data = json.loads(line)
+
+            # Check for ESP32 error messages
+            if "error" in raw_data:
+                logger.error("ESP32 reported error: %s", raw_data["error"])
+                self._errors_count += 1
+                return None
+
+            # The ESP32 sketch already outputs canonical field names,
+            # so we can use them directly.
+            frame = {
+                "engine_temp_c": float(raw_data.get("engine_temp_c", 0.0)),
+                "engine_rpm": float(raw_data.get("engine_rpm", 0.0)),
+                "coolant_temp_c": float(raw_data.get("coolant_temp_c", 0.0)),
+                "battery_voltage_v": float(raw_data.get("battery_voltage_v", 0.0)),
+                "vibration_level": float(raw_data.get("vibration_level", 0.0)),
+                "odometer_reading": float(raw_data.get("odometer_reading", 0.0)),
+                "engine_load": float(raw_data.get("engine_load", 0.0)),
+                "vehicle_speed": float(raw_data.get("vehicle_speed", 0.0)),
+                "timestamp": datetime.now().isoformat(),
+            }
+
+            # Attach raw MPU6050 data if present (for diagnostics)
+            mpu_raw = raw_data.get("mpu6050_raw")
+            if mpu_raw:
+                frame["mpu6050_raw"] = mpu_raw
+
+            self._frames_received += 1
+            self._last_reading_time = frame["timestamp"]
+            return frame
+
+        except json.JSONDecodeError:
+            # Skip non-JSON lines (ESP32 boot messages, etc.)
+            return None
+        except Exception as e:
+            logger.error("Wokwi serial read error: %s", e)
+            self._errors_count += 1
+            return None
+
+    def get_status(self) -> ConnectionStatus:
+        self._status.connected = self._connected
+        self._status.frames_received = self._frames_received
+        self._status.errors_count = self._errors_count
+        self._status.last_reading_timestamp = self._last_reading_time
+        self._status.update_uptime()
+        return self._status
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected
+
+
 class HardwareManager:
     """
     Manages the active Tier 1 telemetry source, background 2 Hz polling,
@@ -539,6 +662,10 @@ class HardwareManager:
             self._source = BluetoothOBDSource(port=self.port_or_address)
         elif self.mode == HardwareMode.SIMULATION:
             self._source = SimulationTelemetrySource()
+        elif self.mode == HardwareMode.WOKWI:
+            self._source = WokwiTelemetrySource(
+                port=self.port_or_address, baudrate=self.baudrate
+            )
         else:
             raise ValueError(f"Unsupported Hardware Mode: {self.mode}")
 

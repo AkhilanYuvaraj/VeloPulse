@@ -253,7 +253,7 @@ class HardwareModeRequest(BaseModel):
 
     mode: str = Field(
         ...,
-        description="Target mode: 'SERIAL', 'BLUETOOTH_OBD', 'SIMULATION'.",
+        description="Target mode: 'SERIAL', 'BLUETOOTH_OBD', 'SIMULATION', 'WOKWI'.",
     )
     port: Optional[str] = Field(
         default=None,

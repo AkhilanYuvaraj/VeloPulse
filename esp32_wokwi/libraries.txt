@@ -1,0 +1,5 @@
+# Wokwi Library Dependencies
+# Add these in Wokwi's Library Manager
+Adafruit MPU6050
+Adafruit Unified Sensor
+ArduinoJson
