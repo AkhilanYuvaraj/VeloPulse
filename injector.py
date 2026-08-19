@@ -30,11 +30,20 @@ Usage:
 import argparse
 import json
 import math
+import os
 import random
 import sys
 import time
 from datetime import datetime
 from typing import Any, Dict, Optional
+
+# Force UTF-8 output on Windows
+if sys.platform == "win32":
+    os.system("chcp 65001 >nul 2>&1")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 # ---------------------------------------------------------------------------
 # Optional dependencies with graceful fallback
