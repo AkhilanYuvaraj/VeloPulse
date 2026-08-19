@@ -474,20 +474,18 @@ class WokwiTelemetrySource(TelemetrySource):
     """
     Reads JSON telemetry from an ESP32 running on Wokwi simulator.
 
-    Connects via pyserial (supports RFC2217 serial-over-TCP for the
-    Wokwi IoT Gateway, or direct COM port via Wokwi CLI).
+    Connects via HTTP GET to the ESP32's virtual WiFi IP address
+    (default: http://10.13.37.2/data).
 
-    The ESP32 sketch outputs one JSON line per reading at 2 Hz with
-    all canonical VeloPulseAI ML features:
+    The ESP32 sketch outputs all canonical VeloPulseAI ML features:
         engine_temp_c, engine_rpm, coolant_temp_c, battery_voltage_v,
         vibration_level, odometer_reading, engine_load, vehicle_speed
     Plus raw MPU6050 diagnostics in a nested ``mpu6050_raw`` object.
     """
 
-    def __init__(self, port: str = "rfc2217://localhost:4000", baudrate: int = 115200):
-        self.port = port
-        self.baudrate = baudrate
-        self.serial_conn = None
+    def __init__(self, port: str = "http://10.13.37.2", baudrate: int = 0):
+        # We repurpose the 'port' arg as the IP address URL for consistency
+        self.url = f"{port.rstrip('/')}/data"
         self._connected = False
         self._frames_received = 0
         self._errors_count = 0
@@ -495,7 +493,7 @@ class WokwiTelemetrySource(TelemetrySource):
         self._status = ConnectionStatus(
             mode=HardwareMode.WOKWI,
             connected=False,
-            port_or_address=self.port,
+            port_or_address=self.url,
             last_reading_timestamp=None,
             frames_received=0,
             errors_count=0,
@@ -503,44 +501,40 @@ class WokwiTelemetrySource(TelemetrySource):
         )
 
     def connect(self) -> bool:
-        if serial is None:
-            logger.error("pyserial is not installed. Cannot use Wokwi mode.")
-            return False
-
+        import requests
         try:
-            self.serial_conn = serial.serial_for_url(
-                self.port,
-                baudrate=self.baudrate,
-                timeout=2.0,
-            )
-            self._connected = True
-            self._status._start_time = time.time()
-            logger.info("Connected to Wokwi ESP32 at %s", self.port)
-            return True
+            logger.info("Connecting to Wokwi ESP32 HTTP Server at %s", self.url)
+            resp = requests.get(self.url, timeout=5.0)
+            if resp.status_code == 200:
+                self._connected = True
+                self._status._start_time = time.time()
+                logger.info("Connected to Wokwi ESP32 successfully.")
+                return True
+            else:
+                logger.error("Failed to connect to Wokwi ESP32. HTTP %d", resp.status_code)
+                self._errors_count += 1
+                return False
         except Exception as e:
-            logger.error("Failed to connect to Wokwi ESP32 at %s: %s", self.port, e)
+            logger.error("Failed to connect to Wokwi ESP32: %s", e)
             self._errors_count += 1
             return False
 
     def disconnect(self) -> None:
         self._connected = False
-        if self.serial_conn:
-            try:
-                self.serial_conn.close()
-            except Exception:
-                pass
         logger.info("Disconnected from Wokwi ESP32.")
 
     def read_frame(self) -> Optional[Dict[str, Any]]:
-        if not self._connected or not self.serial_conn:
+        if not self._connected:
             return None
 
+        import requests
         try:
-            line = self.serial_conn.readline().decode("utf-8", errors="replace").strip()
-            if not line:
+            resp = requests.get(self.url, timeout=2.0)
+            if resp.status_code != 200:
+                self._errors_count += 1
                 return None
 
-            raw_data = json.loads(line)
+            raw_data = resp.json()
 
             # Check for ESP32 error messages
             if "error" in raw_data:
@@ -575,7 +569,7 @@ class WokwiTelemetrySource(TelemetrySource):
             # Skip non-JSON lines (ESP32 boot messages, etc.)
             return None
         except Exception as e:
-            logger.error("Wokwi serial read error: %s", e)
+            logger.error("Wokwi HTTP read error: %s", e)
             self._errors_count += 1
             return None
 
