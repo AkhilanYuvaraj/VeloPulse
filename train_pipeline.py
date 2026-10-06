@@ -88,7 +88,7 @@ class TrainingPipeline:
         X = self.loader.get_feature_matrix(df)
         y = self.loader.get_target(df)
 
-        # Drop rows where target is NaN
+        # Drop rows where target is NaN 
         valid_mask = y.notna()
         X = X.loc[valid_mask].reset_index(drop=True)
         y = y.loc[valid_mask].reset_index(drop=True)
@@ -229,7 +229,7 @@ class TrainingPipeline:
         # Persist artifacts
         self._save_artifacts(X.columns.tolist())
 
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------                    ----------
     # Persistence
     # ------------------------------------------------------------------
     def _save_artifacts(self, feature_names: list) -> None:

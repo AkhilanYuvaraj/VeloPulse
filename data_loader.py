@@ -70,7 +70,6 @@ ENGINEERED_FEATURES: List[str] = [
     "engine_temp_slope",
     "battery_voltage_dip",
     "vibration_rms",
-    "rul_km",
 ]
 
 
